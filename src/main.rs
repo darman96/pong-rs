@@ -1,100 +1,117 @@
-use std::time::Duration;
-
-use sdl2::keyboard::Keycode;
-
 extern crate sdl2;
 
-use sdl2::pixels::Color;
 use sdl2::event::Event;
-use sdl2::rect::Rect;
+use sdl2::keyboard::{KeyboardState, Keycode};
+use sdl2::pixels::Color;
+use sdl2::render::WindowCanvas;
+
+use crate::actor::Actor;
+use chrono::Utc;
+use sdl2::mouse::MouseState;
+use sdl2::{EventPump, Sdl, VideoSubsystem};
+use std::time::Duration;
+
+pub(crate) mod actor;
 
 const WIDTH: u32 = 1000;
 const HEIGHT: u32 = 1000;
 const SPEED: f32 = 10f32;
+const TICK_RATE: i64 = 60;
+const TARGET_FRAME_TIME: i64 = 1_000i64 / TICK_RATE;
 
-fn main() {
-    let sdl_context = sdl2::init().unwrap();
-    let video_subsystem = sdl_context.video().unwrap();
+struct GameState<'a> {
+    _sdl_context: Sdl,
+    _video_system: VideoSubsystem,
+    canvas: WindowCanvas,
+    event_pump: EventPump,
+    last_frame_millis: i64,
+    actors: Vec<Box<dyn Actor<'a>>>,
+}
 
-    let window = video_subsystem.window("sdl test", WIDTH, HEIGHT)
-        .position_centered()
-        .build()
-        .unwrap();
+pub struct InputState<'a> {
+    keyboard_state: KeyboardState<'a>,
+    mouse_state: MouseState,
+}
 
-    let mut canvas = window
-        .into_canvas()
-        .build()
-        .unwrap();
+impl<'a> GameState<'a> {
+    pub fn new() -> Self {
+        let sdl_context = sdl2::init().unwrap();
+        let video_system = sdl_context.video().unwrap();
 
-    canvas.set_draw_color(Color::RGB(0, 255, 255));
-    canvas.clear();
-    canvas.present();
+        let window = video_system
+            .window("sdl test", WIDTH, HEIGHT)
+            .position_centered()
+            .build()
+            .unwrap();
 
-    let mut paddle = Paddle {
-        x: 5f32,
-        y: (HEIGHT / 2) as f32,
-        width: 10f32,
-        height: 125f32,
-    };
+        let canvas = window.into_canvas().build().unwrap();
+        let event_pump = sdl_context.event_pump().unwrap();
 
-    let mut event_pump = sdl_context.event_pump().unwrap();
-    let mut i = 0;
-    'running: loop {
-        i = (i + 1) % 255;
-        canvas.set_draw_color(Color::RGB(i, 64, 255 - i));
-        canvas.clear();
+        GameState {
+            _sdl_context: sdl_context,
+            _video_system: video_system,
+            canvas,
+            event_pump,
+            last_frame_millis: 0,
+            actors: vec![],
+        }
+    }
 
-        for event in event_pump.poll_iter() {
-            match event {
-                Event::Quit { .. } |
-                Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
-                    break 'running
-                },
-                _ => {}
+    pub fn run(&mut self) {
+        self.last_frame_millis = Utc::now().timestamp_millis();
+        'game: loop {
+            for event in self.event_pump.poll_iter() {
+                match event {
+                    Event::Quit { .. }
+                    | Event::KeyDown {
+                        keycode: Some(Keycode::Escape),
+                        ..
+                    } => break 'game,
+                    _ => {}
+                }
+            }
+
+            self.update();
+            self.render();
+        }
+    }
+
+    fn init(&mut self) {
+        // init stuff ...
+    }
+
+    fn update(&'a mut self) {
+        let input_state = InputState {
+            keyboard_state: self.event_pump.keyboard_state(),
+            mouse_state: self.event_pump.mouse_state(),
+        };
+        let delta_time = self.delta_time();
+
+        for actor in &mut self.actors {
+            if let Some(updatable) = actor.updatable() {
+                updatable.update(&input_state, delta_time);
             }
         }
+    }
 
-        let keystate = event_pump.keyboard_state();
+    fn render(&mut self) {
+        self.canvas.set_draw_color(Color::RGB(0, 0, 0));
+        self.canvas.clear();
 
-        match keystate.is_scancode_pressed(sdl2::keyboard::Scancode::Up) {
-            true => {
-                paddle.y -= SPEED;
-                paddle.y = paddle.y.clamp(5f32, ((HEIGHT - 5) as f32) - paddle.height);
-            },
-            false => {}
-        };
+        // render stuff ...
 
-        match keystate.is_scancode_pressed(sdl2::keyboard::Scancode::Down) {
-            true => {
-                paddle.y += SPEED;
-                paddle.y = paddle.y.clamp(5f32, ((HEIGHT - 5) as f32) - paddle.height);
-            },
-            false => {}
-        };
+        self.canvas.present();
+    }
 
-        draw_paddle(&paddle, &mut canvas);
-        draw_ball((WIDTH as i32) / 2i32, (HEIGHT as i32) / 2i32, 5i32, &mut canvas);
-
-        canvas.present();
-        ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 60));
+    fn delta_time(&mut self) -> f32 {
+        let current_millis = Utc::now().timestamp_millis();
+        let delta_time =
+            (current_millis - self.last_frame_millis) as f32 / TARGET_FRAME_TIME as f32;
+        self.last_frame_millis = current_millis;
+        delta_time
     }
 }
 
-fn draw_paddle(paddle: &Paddle, canvas: &mut sdl2::render::Canvas<sdl2::video::Window>) {
-    canvas.set_draw_color(Color::RGB(255, 255, 255));
-    canvas.fill_rect(Rect::new(paddle.x as i32, paddle.y as i32, paddle.width as u32, paddle.height as u32))
-        .unwrap();
-}
-
-fn draw_ball(x: i32, y: i32, r: i32, canvas: &mut sdl2::render::Canvas<sdl2::video::Window>) {
-    canvas.set_draw_color(Color::RGB(255, 255, 255));
-    canvas.fill_rect(Rect::new(x - r, y - r, 2 * (r as u32), 2 * (r as u32)))
-        .unwrap();
-}
-
-pub struct Paddle {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
+fn main() {
+    GameState::new().run();
 }
